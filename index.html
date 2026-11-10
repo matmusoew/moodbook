@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MoodBook</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  :root { --bg:#0b0d14; --card:#141826; --card2:#1c2236; --border:#1f2640; --text:#eef0f7; --muted:#8a93b2; --accent:#7c5cff; --accent2:#ff4d8d; }
+  html.light { --bg:#f4f5fa; --card:#ffffff; --card2:#eef0f7; --border:#e2e5f0; --text:#14182a; --muted:#6b7392; }
+  html, body { background:var(--bg); color:var(--text); font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-font-smoothing:antialiased; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:18px; }
+  .soft { background:var(--card2); }
+  .muted { color:var(--muted); }
+  .line { border-color:var(--border); }
+  .input { background:var(--card2); border:1px solid var(--border); border-radius:14px; color:var(--text); padding:11px 14px; width:100%; outline:none; }
+  .input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(124,92,255,.18); }
+  .btn { background:linear-gradient(135deg,#6c5cff,#c04bff); color:#fff; border-radius:12px; font-weight:600; padding:9px 14px; font-size:13px; }
+  .btn:active { transform:scale(.97); }
+  .btn:disabled { opacity:.5; }
+  .btn-ghost { background:var(--card2); color:var(--text); border:1px solid var(--border); border-radius:12px; font-weight:600; padding:9px 14px; font-size:13px; }
+  .grad { background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899); }
+  .logo-text { background:linear-gradient(90deg,#818cf8,#c4b5fd,#f472b6); -webkit-background-clip:text; background-clip:text; color:transparent; font-weight:800; }
+  .hs::-webkit-scrollbar { display:none; } .hs { scrollbar-width:none; }
+  .mood-chip { font-size:28px; width:56px; height:56px; border-radius:16px; display:flex; align-items:center; justify-content:center; border:2px solid transparent; background:var(--card2); }
+  .mood-chip.on { border-color:var(--accent); }
+  #toast { transition: opacity .3s, transform .3s; }
+  .call-root { position:fixed; inset:0; z-index:70; background:#000; flex-direction:column; color:#fff; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- Desktop sidebar -->
+<aside id="side" class="hidden md:flex fixed inset-y-0 left-0 w-64 flex-col gap-1 border-r line bg-[var(--card)] p-4 z-30"></aside>
+
+<!-- Top bar -->
+<header id="top" class="sticky top-0 z-30 backdrop-blur border-b line px-4 pt-[calc(env(safe-area-inset-top)+12px)] pb-3 flex items-center justify-between md:hidden" style="background:var(--card)"></header>
+
+<main id="main" class="px-4 py-4 pb-28 md:pb-10 md:ml-64 max-w-xl mx-auto min-h-screen"></main>
+
+<!-- Bottom bar (phone) -->
+<nav id="nav" class="md:hidden fixed bottom-0 inset-x-0 z-30 border-t line flex justify-around items-end pt-2 pb-[calc(env(safe-area-inset-bottom)+8px)]" style="background:var(--card)"></nav>
+
+<div id="recaptcha"></div>
+<div id="callroot" class="call-root" style="display:none"></div>
+<div id="toast" class="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 card px-4 py-2.5 text-sm opacity-0 pointer-events-none z-50 max-w-[90%] text-center shadow-xl"></div>
+
+<script>
+/* ============================ 1. SETTINGS YOU EDIT ============================ */
+// Firebase web config (Project settings -> Your apps -> Web). Replace PASTE_ values.
+const firebaseConfig = {
+ apiKey: "AIzaSyAyDLLmrbM-Q81FGhvjRhxSgJPPOiQq91Y",
+  authDomain: "moodbook-47b45.firebaseapp.com",
+  projectId: "moodbook-47b45",
+  storageBucket: "moodbook-47b45.firebasestorage.app",
+  messagingSenderId: "689014485909",
+  appId: "1:689014485909:web:65ee9f9639462c8dda7c9c"
+};
+// App logo: put app.jpg next to this file (same folder on your hosting).
+const APP_LOGO = "app.jpg";
+
+/* ============================ 2. Setup ============================ */
+const CONFIGURED = !Object.values(firebaseConfig).some(v => String(v).startsWith('PASTE_'));
+let auth = null, db = null;
+if (CONFIGURED) {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.firestore();
+}
+const FV = () => firebase.firestore.FieldValue;
+const TS = () => FV().serverTimestamp();
+
+// Favicon
+{
+  const l = document.createElement('link'); l.rel = 'icon'; l.href = APP_LOGO; document.head.appendChild(l);
+}
+
+/* ============================ 3. Translations ============================ */
+const T = {
+  en: {
+    tagline: 'Share your daily mood and stay connected with friends.',
+    google: 'Continue with Google', or: 'or with phone', phone: 'Phone number (+...)', sendCode: 'Send SMS code',
+    code: 'SMS code', verify: 'Verify', back: 'Back',
+    setupTitle: 'Create your profile', name: 'Full name', nick: 'Nickname',
+    nickHint: 'Letters, numbers and _ (3–20). Must be unique.', save: 'Continue',
+    feed: 'Feed', chats: 'Chats', search: 'Search', profile: 'Profile', settings: 'Settings', notifs: 'Notifications',
+    yourDay: 'Your Day', moodTitle: "Share Your Today's Mood", moodQ: 'How was your day?',
+    storyQ: 'What happened today?', storyPh: 'Write a brief story about how your day went...', publish: 'Publish Mood',
+    noPosts: 'No mood updates yet. Share how you feel!', like: 'Like', message: 'Message', del: 'Delete',
+    findPeople: 'Find People', searchPh: 'Search by name or nickname...', nobody: 'Nobody found',
+    addFriend: '+ Add Friend', requested: 'Requested', accept: 'Accept', decline: 'Decline', cancel: 'Cancel',
+    incoming: 'Friend requests', outgoing: 'Sent requests',
+    directMessages: 'Direct Messages', noChats: 'Add friends to start chatting.', typeMsg: 'Type a message...', send: 'Send',
+    postsLbl: 'Posts', friendsLbl: 'Friends', moodHistory: 'Your mood history', noMine: "You haven't posted any mood update yet.",
+    language: 'Language', theme: 'Theme', dark: 'Dark', light: 'Light', notifOn: 'Enable notifications',
+    notifOk: 'Notifications are enabled', notifOff: 'Notifications are blocked in your browser',
+    logout: 'Log out', noNotifs: 'No notifications yet', markRead: 'Mark all read',
+    welcome: 'Welcome to MoodBook', noConfig: 'Firebase is not configured yet. Paste your config into firebaseConfig.',
+    err_phone: 'Enter phone in international format, e.g. +998901234567', err_code: 'Wrong code',
+    err_name: 'Enter your full name', err_nick: 'Nickname: 3–20 letters, numbers or _',
+    err_taken: 'This nickname is taken', err_generic: 'Something went wrong. Try again.',
+    err_text: 'Write something first', requestSent: 'Friend request sent', nowFriends: 'You are now friends!',
+    postDone: 'Mood published', n_like: 'liked your mood', n_request: 'sent you a friend request',
+    n_accepted: 'accepted your friend request', sign: 'Sign in'
+  },
+  ru: {
+    tagline: 'Делитесь настроением и оставайтесь на связи с друзьями.',
+    google: 'Продолжить с Google', or: 'или по телефону', phone: 'Номер телефона (+...)', sendCode: 'Отправить SMS-код',
+    code: 'Код из SMS', verify: 'Подтвердить', back: 'Назад',
+    setupTitle: 'Создайте профиль', name: 'Полное имя', nick: 'Никнейм',
+    nickHint: 'Латинские буквы, цифры и _ (3–20). Должен быть уникальным.', save: 'Продолжить',
+    feed: 'Лента', chats: 'Чаты', search: 'Поиск', profile: 'Профиль', settings: 'Настройки', notifs: 'Уведомления',
+    yourDay: 'Ваш день', moodTitle: 'Поделитесь настроением', moodQ: 'Как прошёл ваш день?',
+    storyQ: 'Что произошло сегодня?', storyPh: 'Коротко расскажите, как прошёл ваш день...', publish: 'Опубликовать',
+    noPosts: 'Записей о настроении пока нет. Поделитесь, как вы себя чувствуете!', like: 'Нравится', message: 'Написать', del: 'Удалить',
+    findPeople: 'Найти людей', searchPh: 'Поиск по имени или никнейму...', nobody: 'Никого не найдено',
+    addFriend: '+ Добавить в друзья', requested: 'Заявка отправлена', accept: 'Принять', decline: 'Отклонить', cancel: 'Отменить',
+    incoming: 'Заявки в друзья', outgoing: 'Отправленные заявки',
+    directMessages: 'Личные сообщения', noChats: 'Добавьте друзей, чтобы начать общение.', typeMsg: 'Введите сообщение...', send: 'Отправить',
+    postsLbl: 'Посты', friendsLbl: 'Друзья', moodHistory: 'Ваша история настроения', noMine: 'Вы ещё не публиковали настроение.',
+    language: 'Язык', theme: 'Тема', dark: 'Тёмная', light: 'Светлая', notifOn: 'Включить уведомления',
+    notifOk: 'Уведомления включены', notifOff: 'Уведомления заблокированы в браузере',
+    logout: 'Выйти', noNotifs: 'Уведомлений пока нет', markRead: 'Отметить все прочитанными',
+    welcome: 'Добро пожаловать в MoodBook', noConfig: 'Firebase ещё не настроен. Вставьте конфиг в firebaseConfig.',
+    err_phone: 'Введите номер в международном формате, например +998901234567', err_code: 'Неверный код',
+    err_name: 'Введите полное имя', err_nick: 'Никнейм: 3–20 латинских букв, цифр или _',
+    err_taken: 'Этот никнейм занят', err_generic: 'Что-то пошло не так. Попробуйте снова.',
+    err_text: 'Сначала напишите текст', requestSent: 'Заявка в друзья отправлена', nowFriends: 'Вы теперь друзья!',
+    postDone: 'Настроение опубликовано', n_like: 'оценил(а) ваше настроение', n_request: 'отправил(а) вам заявку в друзья',
+    n_accepted: 'принял(а) вашу заявку в друзья', sign: 'Войти'
+  }
+};
+Object.assign(T.en, {
+  aboutTitle: 'About MoodBook',
+  aboutText: "MoodBook is a simple social app to share how you feel each day and stay close to your friends. Post your mood, like your friends' posts, and chat with the people you add as friends.",
+  aboutWhy: "Why we ask for information: your full name and nickname are shown to your friends so they can find and recognize you. Your phone number or Google email is used only to sign you in and is never shown to other users.",
+  aboutPrivacy: 'Only your friends can see your posts and messages. You can delete your posts at any time.',
+  aboutVersion: 'Version 1.0', aboutDev: 'Developed by matmusoevs', byline: 'from matmusoevs',
+  changePhoto: 'Change photo', photoSaved: 'Profile photo updated'
+});
+Object.assign(T.ru, {
+  aboutTitle: 'О MoodBook',
+  aboutText: 'MoodBook — простое приложение, где можно делиться своим настроением каждый день и оставаться на связи с друзьями. Публикуйте настроение, ставьте лайки постам друзей и общайтесь с теми, кто стал вашим другом.',
+  aboutWhy: 'Зачем нужны данные: полное имя и никнейм видны вашим друзьям, чтобы их можно было найти. Номер телефона или email Google используются только для входа и другим пользователям не показываются.',
+  aboutPrivacy: 'Посты и сообщения видят только ваши друзья. Вы можете удалить свои посты в любое время.',
+  aboutVersion: 'Версия 1.0', aboutDev: 'Разработчик: matmusoevs', byline: 'от matmusoevs',
+  changePhoto: 'Сменить фото', photoSaved: 'Фото профиля обновлено'
+});
+const MOODS = ['😭', '🙁', '😐', '🙂', '😄'];
+let lang = localStorage.getItem('mb_lang') || 'en';
+let theme = localStorage.getItem('mb_theme') || 'dark';
+const tr = k => (T[lang] && T[lang][k]) || T.en[k] || k;
+
+/* ============================ 4. State ============================ */
+const st = {
+  user: null, profile: null,
+  tab: 'feed', step: 'phone', confirmation: null, recaptcha: null, phone: '', err: '', busy: false,
+  profiles: new Map(),
+  friendIds: [], incoming: [], outgoing: [],
+  posts: [], notifs: [],
+  chatWith: null, msgs: [], searchQ: '',
+  modal: false, mood: MOODS[4], draftPost: '', draftMsg: '',
+  unsubs: [], postUnsub: null, chatUnsub: null
+};
+
+/* ============================ 5. Helpers ============================ */
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
+function fid(a, b) { return [a, b].sort().join('_'); }
+function tsOf(x) { const v = x && x.createdAt; return v && v.toMillis ? v.toMillis() : Date.now(); }
+function ago(ms) {
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return lang === 'ru' ? 'сейчас' : 'now';
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 24 ? h + 'h' : Math.floor(h / 24) + 'd';
+}
+function avatar(p, size = 'w-11 h-11', text = 'text-base') {
+  if (p && p.photo) return `<img src="${p.photo}" alt="" class="${size} rounded-full object-cover shrink-0">`;
+  const name = (p && p.name) || '?';
+  const hue = [...((p && p.id) || name)].reduce((x, c) => x + c.charCodeAt(0), 0) % 360;
+  return `<div class="${size} ${text} rounded-full flex items-center justify-center font-bold text-white shrink-0" style="background:hsl(${hue},60%,45%)">${esc(name.charAt(0).toUpperCase())}</div>`;
+}
+function logoHTML(size) {
+  return `<span class="${size} rounded-xl overflow-hidden grad inline-flex items-center justify-center shrink-0 relative">
+    <span class="absolute text-base">😊</span>
+    <img src="${APP_LOGO}" alt="MoodBook" class="w-full h-full object-cover relative" onerror="this.style.display='none'"></span>`;
+}
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg; el.style.opacity = 1; el.style.transform = 'translate(0,0)';
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { el.style.opacity = 0; }, 2600);
+}
+function setErr(msg) { st.err = msg; render(); }
+function on(q, cb) { st.unsubs.push(q.onSnapshot(cb, e => console.error(e))); }
+function unsubAll() {
+  st.unsubs.forEach(f => f()); st.unsubs = [];
+  if (st.postUnsub) { st.postUnsub(); st.postUnsub = null; }
+  if (st.chatUnsub) { st.chatUnsub(); st.chatUnsub = null; }
+}
+async function loadProfiles(ids) {
+  const need = [...new Set(ids)].filter(id => id && !st.profiles.has(id));
+  await Promise.all(need.map(async id => {
+    const d = await db.collection('users').doc(id).get();
+    if (d.exists) st.profiles.set(id, { id, ...d.data() });
+  }));
+  if (need.length) render();
+}
+const prof = id => st.profiles.get(id) || { id, name: '…', nick: '' };
+const unread = () => st.notifs.filter(n => !n.read).length + st.incoming.length;
+
+/* ============================ 5a. Verified badge ============================ */
+function badge(p) {
+  return p && p.verified ? ' <span title="Verified" class="inline-block align-middle text-[#1d9bf0] text-sm">✔</span>' : '';
+}
+
+/* ============================ 5b. Profile photo ============================ */
+function compressImage(file, max) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const sc = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        res(c.toDataURL('image/jpeg', 0.8));
+      };
+      img.onerror = rej; img.src = r.result;
+    };
+    r.onerror = rej; r.readAsDataURL(file);
+  });
+}
+async function uploadPhoto(input) {
+  const f = input.files[0]; if (!f) return;
+  try {
+    const data = await compressImage(f, 256); // small square-ish image, stored in the user profile
+    await db.collection('users').doc(st.user.uid).update({ photo: data });
+    st.profile.photo = data;
+    st.profiles.set(st.user.uid, st.profile);
+    toast(tr('photoSaved')); render();
+  } catch (e) { console.error(e); toast(tr('err_generic')); }
+}
+
+/* ============================ 6. Realtime ============================ */
+function subscribe() {
+  unsubAll();
+  const uid = st.user.uid;
+  on(db.collection('friendships').where('members', 'array-contains', uid), snap => {
+    st.friendIds = snap.docs.map(d => d.data().members.find(x => x !== uid));
+    loadProfiles(st.friendIds);
+    subscribePosts();
+    render();
+  });
+  let reqFirst = true;
+  on(db.collection('requests').where('to', '==', uid), snap => {
+    if (!reqFirst) snap.docChanges().forEach(c => { if (c.type === 'added') { notifySound(); toast(tr('n_request')); } });
+    reqFirst = false;
+    st.incoming = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    loadProfiles(st.incoming.map(r => r.from));
+    render();
+  });
+  on(db.collection('requests').where('from', '==', uid), snap => {
+    st.outgoing = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    loadProfiles(st.outgoing.map(r => r.to));
+    render();
+  });
+  watchIncomingCalls();
+  watchMessages();
+  let first = true;
+  on(db.collection('notifications').doc(uid).collection('items').orderBy('createdAt', 'desc').limit(60), snap => {
+    st.notifs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    loadProfiles(st.notifs.map(n => n.from));
+    if (!first) snap.docChanges().forEach(c => {
+      if (c.type === 'added') { const n = c.doc.data(); if (!n.read && n.from !== uid) announce(n); }
+    });
+    first = false;
+    render();
+  });
+}
+function subscribePosts() {
+  if (st.postUnsub) st.postUnsub();
+  const ids = [st.user.uid, ...st.friendIds].slice(0, 30);
+  st.postUnsub = db.collection('posts').where('uid', 'in', ids).onSnapshot(snap => {
+    st.posts = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => tsOf(b) - tsOf(a));
+    loadProfiles(st.posts.map(p => p.uid));
+    render();
+  }, e => console.error(e));
+}
+function subscribeChat(friendUid) {
+  if (st.chatUnsub) st.chatUnsub();
+  st.chatUnsub = db.collection('friendships').doc(fid(st.user.uid, friendUid)).collection('messages')
+    .orderBy('createdAt').onSnapshot(snap => {
+      st.msgs = snap.docs.map(d => d.data());
+      renderMain();
+      const box = $('msgs'); if (box) box.scrollTop = box.scrollHeight;
+    }, e => console.error(e));
+}
+
+/* ============================ 7. Notifications ============================ */
+let audioCtx = null;
+function soundOn() { return localStorage.getItem('mb_sound') !== 'off'; }
+function notifySound() {
+  if (!soundOn()) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.25, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.4);
+    o.connect(g); g.connect(audioCtx.destination); o.start(t0); o.stop(t0 + 0.4);
+  } catch (_) {}
+}
+function toggleSound() { localStorage.setItem('mb_sound', soundOn() ? 'off' : 'on'); render(); }
+// New messages from any friend (needs the collection-group index)
+function watchMessages() {
+  const since = firebase.firestore.Timestamp.now();
+  on(db.collectionGroup('messages').where('members', 'array-contains', st.user.uid).where('createdAt', '>', since), snap => {
+    snap.docChanges().forEach(c => {
+      if (c.type !== 'added') return;
+      const m = c.doc.data();
+      if (m.from === st.user.uid) return;
+      if (st.chatWith === m.from && st.tab === 'chats') return;
+      notifySound();
+      loadProfiles([m.from]).then(() => toast(`${prof(m.from).name}: ${m.text}`));
+    });
+  });
+}
+function notifText(n) {
+  const what = n.type === 'like' ? tr('n_like') : n.type === 'request' ? tr('n_request') : tr('n_accepted');
+  return `${prof(n.from).name} ${what}`;
+}
+function announce(n) {
+  const text = notifText(n);
+  toast(text);
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { new Notification('MoodBook', { body: text }); } catch (_) {}
+  }
+}
+async function notify(toUid, type, extra = '') {
+  if (!toUid || toUid === st.user.uid) return;
+  await db.collection('notifications').doc(toUid).collection('items')
+    .doc(`${type}_${st.user.uid}_${extra}`)
+    .set({ from: st.user.uid, type, postId: extra, read: false, createdAt: TS() });
+}
+async function unnotify(toUid, type, extra = '') {
+  if (!toUid || toUid === st.user.uid) return;
+  await db.collection('notifications').doc(toUid).collection('items').doc(`${type}_${st.user.uid}_${extra}`).delete();
+}
+async function markAllRead() {
+  const list = st.notifs.filter(n => !n.read);
+  if (!list.length) return;
+  const b = db.batch();
+  list.forEach(n => b.update(db.collection('notifications').doc(st.user.uid).collection('items').doc(n.id), { read: true }));
+  await b.commit();
+}
+async function enableNotifications() {
+  if (!('Notification' in window)) return toast(tr('notifOff'));
+  const r = await Notification.requestPermission();
+  toast(r === 'granted' ? tr('notifOk') : tr('notifOff'));
+  render();
+}
+
+/* ============================ 8. Auth ============================ */
+if (CONFIGURED) {
+  auth.onAuthStateChanged(async user => {
+    st.user = user;
+    if (!user) { unsubAll(); st.profile = null; st.step = 'phone'; render(); return; }
+    const snap = await db.collection('users').doc(user.uid).get();
+    if (snap.exists) {
+      st.profile = { id: user.uid, ...snap.data() };
+      st.profiles.set(user.uid, st.profile);
+      subscribe();
+    } else st.profile = null;
+    render();
+  });
+}
+async function loginGoogle() {
+  try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+  catch (e) { if (e.code !== 'auth/popup-closed-by-user') setErr(tr('err_generic')); }
+}
+async function sendCode(e) {
+  e.preventDefault();
+  const p = $('ph').value.replace(/[\s()-]/g, '');
+  if (!/^\+\d{7,15}$/.test(p)) return setErr(tr('err_phone'));
+  try {
+    if (!st.recaptcha) st.recaptcha = new firebase.auth.RecaptchaVerifier('recaptcha', { size: 'invisible' });
+    st.phone = p;
+    st.confirmation = await auth.signInWithPhoneNumber(p, st.recaptcha);
+    st.step = 'code'; st.err = ''; render();
+  } catch (err) {
+    console.error(err);
+    if (st.recaptcha) { try { st.recaptcha.clear(); } catch (_) {} st.recaptcha = null; }
+    setErr(err.code === 'auth/invalid-phone-number' ? tr('err_phone') : tr('err_generic'));
+  }
+}
+async function verifyCode(e) {
+  e.preventDefault();
+  try { await st.confirmation.confirm($('cd').value.trim()); }
+  catch (err) { setErr(tr('err_code')); }
+}
+async function logout() {
+  await auth.signOut();
+  st.recaptcha = null; st.step = 'phone'; st.tab = 'feed'; st.chatWith = null; st.modal = false;
+}
+
+/* ============================ 9. Profile setup (unique nickname) ============================ */
+async function saveProfile(e) {
+  e.preventDefault();
+  const name = $('su-name').value.trim();
+  const nick = $('su-nick').value.trim().toLowerCase();
+  if (name.length < 2) return setErr(tr('err_name'));
+  if (!/^[a-z0-9_]{3,20}$/.test(nick)) return setErr(tr('err_nick'));
+  const uid = st.user.uid;
+  st.busy = true; render();
+  try {
+    const verified = await db.runTransaction(async tx => {
+      const nickRef = db.collection('nicknames').doc(nick);
+      const statsRef = db.collection('meta').doc('stats');
+      // All reads first (Firestore requirement), then writes
+      const n = await tx.get(nickRef);
+      if (n.exists && n.data().uid !== uid) throw new Error('TAKEN');
+      const sSnap = await tx.get(statsRef);
+      const count = sSnap.exists ? (sSnap.data().count || 0) : 0;
+      const isVerified = count < 20; // first 20 people get the badge
+      tx.set(nickRef, { uid });
+      tx.set(statsRef, { count: count + 1 });
+      tx.set(db.collection('users').doc(uid), {
+        name, nick, phone: st.user.phoneNumber || '', email: st.user.email || '',
+        verified: isVerified, createdAt: TS()
+      });
+      return isVerified;
+    });
+    st.profile = { id: uid, name, nick, verified: !!verified };
+    st.profiles.set(uid, st.profile);
+    st.busy = false; st.err = '';
+    subscribe(); render();
+  } catch (err) {
+    st.busy = false;
+    setErr(err.message === 'TAKEN' ? tr('err_taken') : tr('err_generic'));
+  }
+}
+
+/* ============================ 10. Mood posts & likes ============================ */
+function openMood() { st.modal = true; st.draftPost = ''; render(); }
+function closeMood() { st.modal = false; render(); }
+async function publishMood() {
+  const text = st.draftPost.trim();
+  if (!text) return toast(tr('err_text'));
+  await db.collection('posts').add({ uid: st.user.uid, mood: st.mood, text, likes: [], createdAt: TS() });
+  st.modal = false; st.draftPost = ''; toast(tr('postDone')); render();
+}
+async function toggleLike(postId) {
+  const p = st.posts.find(x => x.id === postId); if (!p) return;
+  const liked = (p.likes || []).includes(st.user.uid);
+  await db.collection('posts').doc(postId).update({
+    likes: liked ? FV().arrayRemove(st.user.uid) : FV().arrayUnion(st.user.uid)
+  });
+  if (liked) await unnotify(p.uid, 'like', postId);
+  else await notify(p.uid, 'like', postId);
+}
+async function deletePost(id) { await db.collection('posts').doc(id).delete(); }
+
+/* ============================ 11. Search & friends ============================ */
+async function runSearch(q) {
+  st.searchQ = q;
+  const box = $('results'); if (!box) return;
+  const s = q.trim().toLowerCase().replace(/^@/, '');
+  if (!s) { box.innerHTML = ''; return; }
+  const snap = await db.collection('users').where('nick', '>=', s).where('nick', '<=', s + '\uf8ff').limit(15).get();
+  const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.id !== st.user.uid);
+  list.forEach(p => st.profiles.set(p.id, p));
+  box.innerHTML = list.length ? list.map(userRowHTML).join('') : `<p class="text-center text-sm muted py-6">${tr('nobody')}</p>`;
+}
+function relation(uid) {
+  if (st.friendIds.includes(uid)) return 'friend';
+  if (st.incoming.some(r => r.from === uid)) return 'in';
+  if (st.outgoing.some(r => r.to === uid)) return 'out';
+  return 'none';
+}
+async function openUser(uid) {
+  st.viewUser = uid; st.tab = 'user'; st.viewFriends = []; render();
+  const snap = await db.collection('friendships').where('members', 'array-contains', uid).get();
+  st.viewFriends = snap.docs.map(d => d.data().members.find(x => x !== uid));
+  await loadProfiles([uid, ...st.viewFriends]);
+  if (st.tab === 'user' && st.viewUser === uid) render();
+}
+function userView() {
+  const p = prof(st.viewUser);
+  const rel = relation(p.id);
+  const act = {
+    none: `<button onclick="sendRequest('${p.id}')" class="btn px-5 py-2.5">${tr('addFriend')}</button>`,
+    out: `<button onclick="cancelRequest('${p.id}')" class="btn-ghost px-5 py-2.5">${tr('requested')}</button>`,
+    in: `<button onclick="acceptRequest('${p.id}')" class="btn px-5 py-2.5">${tr('accept')}</button>`,
+    friend: `<button onclick="openChat('${p.id}')" class="btn-ghost px-5 py-2.5">💬 ${tr('message')}</button>`
+  }[rel];
+  const list = (st.viewFriends || []).map(prof).map(f => `<div onclick="openUser('${f.id}')" class="card p-3 flex items-center gap-3 cursor-pointer">
+      ${avatar(f)}<div class="flex-1 min-w-0"><div class="text-sm font-semibold truncate">${esc(f.name)}${badge(f)}</div>
+      <div class="text-xs muted">@${esc(f.nick)}</div></div></div>`).join('');
+  return `<div class="space-y-5">
+    <button onclick="go('search')" class="muted text-sm">${tr('back2')}</button>
+    <div class="text-center space-y-3">
+      ${avatar(p, 'w-24 h-24 mx-auto', 'text-3xl')}
+      <h2 class="text-xl font-bold">${esc(p.name)}${badge(p)}</h2>
+      <p class="text-sm" style="color:var(--accent)">@${esc(p.nick)}</p>
+      <div>${act}</div>
+    </div>
+    <h3 class="text-xs uppercase muted font-semibold">${tr('friendsLbl')} (${(st.viewFriends || []).length})</h3>
+    ${list || `<p class="text-center text-sm muted py-4">${tr('noChats')}</p>`}
+  </div>`;
+}
+function userRowHTML(p) {
+  const rel = relation(p.id);
+  const action = {
+    none: `<button onclick="sendRequest('${p.id}')" class="btn">${tr('addFriend')}</button>`,
+    out: `<button onclick="cancelRequest('${p.id}')" class="btn-ghost">${tr('requested')}</button>`,
+    in: `<button onclick="acceptRequest('${p.id}')" class="btn">${tr('accept')}</button>`,
+    friend: `<button onclick="openChat('${p.id}')" class="btn-ghost">💬</button>`
+  }[rel];
+  return `<div class="card p-3 flex items-center gap-3">
+    <div onclick="openUser('${p.id}')" class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">${avatar(p)}
+    <div class="flex-1 min-w-0"><div class="font-semibold text-sm truncate">${esc(p.name)}${badge(p)}</div>
+    <div class="text-xs muted">@${esc(p.nick)}</div></div></div>${action}</div>`;
+}
+async function sendRequest(uid) {
+  if (st.incoming.some(r => r.from === uid)) return acceptRequest(uid);
+  await db.collection('requests').doc(`${st.user.uid}_${uid}`).set({ from: st.user.uid, to: uid, createdAt: TS() });
+  await notify(uid, 'request');
+  toast(tr('requestSent'));
+}
+async function cancelRequest(uid) { await db.collection('requests').doc(`${st.user.uid}_${uid}`).delete(); }
+async function declineRequest(uid) { await db.collection('requests').doc(`${uid}_${st.user.uid}`).delete(); }
+async function acceptRequest(uid) {
+  try {
+    const b = db.batch();
+    b.set(db.collection('friendships').doc(fid(st.user.uid, uid)), { members: [st.user.uid, uid], createdAt: TS() });
+    b.delete(db.collection('requests').doc(`${uid}_${st.user.uid}`));
+    await b.commit();
+    await notify(uid, 'accepted');
+    toast(tr('nowFriends'));
+  } catch (e) {
+    console.error(e);
+    toast(tr('err_generic'));
+  }
+}
+
+/* ============================ 12. Chat (friends only) ============================ */
+function openChat(uid) { st.chatWith = uid; st.tab = 'chats'; st.draftMsg = ''; subscribeChat(uid); render(); }
+function closeChat() {
+  st.chatWith = null;
+  if (st.chatUnsub) { st.chatUnsub(); st.chatUnsub = null; }
+  render();
+}
+async function sendMessage(e) {
+  e.preventDefault();
+  const text = st.draftMsg.trim(); if (!text || !st.chatWith) return;
+  const peer = st.chatWith;
+  st.draftMsg = '';
+  try {
+    await db.collection('friendships').doc(fid(st.user.uid, peer)).collection('messages')
+      .add({ from: st.user.uid, text, members: [st.user.uid, peer], createdAt: TS() });
+  } catch (err) {
+    console.error('Message failed:', err);
+    st.draftMsg = text; // keep the text so it is not lost
+    toast((lang === 'ru' ? 'Не отправлено: ' : 'Not sent: ') + (err.code || err.message || 'error'));
+    render();
+  }
+}
+
+/* ============================ 12b. Voice & video calls ============================ */
+// Calls are peer-to-peer (WebRTC). Firestore only carries the connection setup (calls/{id}).
+const RTC = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+const call = { id: null, role: null, pc: null, local: null, remote: null, unsubs: [], timer: null, ring: null, connected: false, peer: null };
+
+function showCallUI(html) { const r = $('callroot'); r.innerHTML = html; r.style.display = 'flex'; }
+function hideCallUI() { const r = $('callroot'); r.style.display = 'none'; r.innerHTML = ''; }
+function attachStreams() {
+  const rv = $('rv'), lv = $('lv');
+  if (rv && call.remote) rv.srcObject = call.remote;
+  if (lv && call.local) lv.srcObject = call.local;
+}
+function setCallStatus(text) { const el = $('cstat'); if (el) el.textContent = text; }
+function callScreenHTML(peer, status) {
+  return `<div class="relative flex-1 bg-black">
+      <video id="rv" autoplay playsinline class="w-full h-full object-cover"></video>
+      <div id="cs" class="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
+        ${avatar(peer, 'w-24 h-24', 'text-3xl')}
+        <div class="text-lg font-bold">${esc(peer.name)}</div>
+        <div id="cstat" class="opacity-70 text-sm">${esc(status)}</div></div>
+      <video id="lv" autoplay playsinline muted class="absolute right-3 top-3 w-28 h-40 rounded-xl object-cover border border-white/20"></video>
+    </div>
+    <div class="flex justify-center items-center gap-6 py-6 bg-black">
+      <button onclick="toggleMic()" id="bmic" class="w-14 h-14 rounded-full bg-white/15 text-xl">🎤</button>
+      <button onclick="toggleCam()" id="bcam" class="w-14 h-14 rounded-full bg-white/15 text-xl">📷</button>
+      <button onclick="endCall('ended')" class="w-16 h-16 rounded-full bg-rose-600 text-2xl">📵</button>
+    </div>`;
+}
+async function openMedia(type) {
+  try {
+    call.local = await navigator.mediaDevices.getUserMedia({ audio: true, video: type === 'video' });
+  } catch (e) {
+    if (type === 'video' && ['NotFoundError', 'OverconstrainedError', 'NotReadableError'].includes(e.name)) {
+      call.local = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      toast(lang === 'ru' ? 'Камера не найдена — звонок только голосом' : 'No camera found — voice call only');
+    } else throw e;
+  }
+}
+// Connection info can be produced before the call document exists or before the remote
+// description is set. Hold it back and send/apply it at the right moment.
+function flushLocal(ref, role) {
+  const mine = role === 'caller' ? 'callerCandidates' : 'calleeCandidates';
+  call.ready = true;
+  call.cands.forEach(c => ref.collection(mine).add(c).catch(err => console.error('ICE save failed', err)));
+  call.cands = [];
+}
+function flushRemote(pc) {
+  call.remoteQ.forEach(c => pc.addIceCandidate(c).catch(err => console.error('ICE apply failed', err)));
+  call.remoteQ = [];
+}
+function makePC(ref, role) {
+  const pc = new RTCPeerConnection(RTC);
+  call.remote = new MediaStream();
+  pc.ontrack = e => { e.streams[0].getTracks().forEach(t => call.remote.addTrack(t)); attachStreams(); };
+  const mine = role === 'caller' ? 'callerCandidates' : 'calleeCandidates';
+  const theirs = role === 'caller' ? 'calleeCandidates' : 'callerCandidates';
+  call.ready = false; call.cands = []; call.remoteQ = [];
+  pc.onicecandidate = e => {
+    if (!e.candidate) return;
+    const c = e.candidate.toJSON();
+    if (call.ready) ref.collection(mine).add(c).catch(err => console.error('ICE save failed', err));
+    else call.cands.push(c);
+  };
+  call.unsubs.push(ref.collection(theirs).onSnapshot(snap => snap.docChanges().forEach(c => {
+    if (c.type !== 'added') return;
+    const cand = new RTCIceCandidate(c.doc.data());
+    if (pc.remoteDescription) pc.addIceCandidate(cand).catch(err => console.error('ICE apply failed', err));
+    else call.remoteQ.push(cand);
+  })));
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') {
+      call.connected = true; clearTimeout(call.timer);
+      const cs = $('cs'); if (cs) cs.style.display = 'none';
+    }
+    if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) endCall('ended');
+  };
+  return pc;
+}
+function cleanup() {
+  clearTimeout(call.timer);
+  clearInterval(call.ring);
+  call.unsubs.forEach(f => { try { f(); } catch (_) {} }); call.unsubs = [];
+  if (call.pc) { try { call.pc.close(); } catch (_) {} call.pc = null; }
+  if (call.local) { call.local.getTracks().forEach(t => t.stop()); call.local = null; }
+  call.remote = null; call.id = null; call.role = null; call.connected = false; call.peer = null;
+  hideCallUI();
+}
+async function endCall(status = 'ended') {
+  if (!call.id) return;
+  const id = call.id;
+  cleanup();
+  try { await db.collection('calls').doc(id).update({ status }); } catch (_) {}
+}
+function callErrText(e) {
+  if (e && e.name === 'NotAllowedError') return lang === 'ru' ? 'Разрешите доступ к микрофону и камере' : 'Allow microphone and camera access';
+  return tr('err_generic') + ' (' + ((e && e.name) || 'error') + ')';
+}
+
+// Caller
+async function startCall(uid, type) {
+  if (call.id) return toast(lang === 'ru' ? 'Звонок уже идёт' : 'A call is already in progress');
+  if (!st.friendIds.includes(uid)) return toast(tr('noChats'));
+  const ref = db.collection('calls').doc();
+  call.id = ref.id; call.role = 'caller'; call.peer = prof(uid);
+  try {
+    await openMedia(type);
+    call.pc = makePC(ref, 'caller');
+    call.local.getTracks().forEach(t => call.pc.addTrack(t, call.local));
+    const offer = await call.pc.createOffer();
+    await call.pc.setLocalDescription(offer);
+    await ref.set({ from: st.user.uid, to: uid, type, status: 'ringing',
+      offer: { type: offer.type, sdp: offer.sdp }, createdAt: TS() });
+    flushLocal(ref, 'caller');
+    showCallUI(callScreenHTML(call.peer, lang === 'ru' ? 'Вызов...' : 'Calling...'));
+    attachStreams();
+    call.unsubs.push(ref.onSnapshot(async snap => {
+      const d = snap.data(); if (!d) return;
+      if (['declined', 'ended', 'missed'].includes(d.status)) return endCall('ended');
+      if (d.answer && call.pc && !call.pc.currentRemoteDescription) {
+        await call.pc.setRemoteDescription(new RTCSessionDescription(d.answer));
+        flushRemote(call.pc);
+      }
+    }));
+    call.timer = setTimeout(() => { if (!call.connected) endCall('missed'); }, 45000);
+  } catch (e) {
+    console.error(e); toast(callErrText(e)); cleanup();
+  }
+}
+
+// Callee
+function watchIncomingCalls() {
+  on(db.collection('calls').where('to', '==', st.user.uid).where('status', '==', 'ringing'), snap => {
+    snap.docChanges().forEach(c => {
+      if (c.type === 'added' && !call.id) showIncoming(c.doc.id, c.doc.data());
+      if (c.type === 'removed' && c.doc.id === call.id && call.role === 'callee' && !call.connected) cleanup();
+    });
+  });
+}
+function showIncoming(id, d) {
+  call.id = id; call.role = 'callee';
+  const p = prof(d.from); call.peer = p;
+  notifySound(); call.ring = setInterval(notifySound, 1500);
+  showCallUI(`<div class="flex-1 flex flex-col items-center justify-center gap-5">
+      ${avatar(p, 'w-28 h-28', 'text-4xl')}
+      <div class="text-xl font-bold">${esc(p.name)}</div>
+      <div class="opacity-70">${d.type === 'video' ? '🎥' : '📞'} ${lang === 'ru' ? 'Входящий звонок' : 'Incoming call'}</div>
+      <div class="flex gap-12 mt-6">
+        <button onclick="endCall('declined')" class="w-16 h-16 rounded-full bg-rose-600 text-2xl">✕</button>
+        <button onclick="acceptCall('${id}')" class="w-16 h-16 rounded-full bg-emerald-600 text-2xl">✓</button>
+      </div></div>`);
+  call.timer = setTimeout(() => { if (!call.connected) endCall('missed'); }, 45000);
+}
+async function acceptCall(id) {
+  const ref = db.collection('calls').doc(id);
+  try {
+    const d = (await ref.get()).data();
+    if (!d || d.status !== 'ringing') return cleanup();
+    await openMedia(d.type);
+    call.pc = makePC(ref, 'callee');
+    call.local.getTracks().forEach(t => call.pc.addTrack(t, call.local));
+    await call.pc.setRemoteDescription(new RTCSessionDescription(d.offer));
+    flushRemote(call.pc);
+    const answer = await call.pc.createAnswer();
+    await call.pc.setLocalDescription(answer);
+    await ref.update({ answer: { type: answer.type, sdp: answer.sdp }, status: 'active' });
+    flushLocal(ref, 'callee');
+    showCallUI(callScreenHTML(call.peer, lang === 'ru' ? 'Соединение...' : 'Connecting...'));
+    attachStreams();
+    call.unsubs.push(ref.onSnapshot(snap => {
+      const x = snap.data();
+      if (x && ['ended', 'declined', 'missed'].includes(x.status)) cleanup();
+    }));
+  } catch (e) {
+    console.error(e); toast(callErrText(e)); cleanup();
+  }
+}
+function toggleMic() {
+  if (!call.local) return;
+  call.local.getAudioTracks().forEach(t => t.enabled = !t.enabled);
+  const b = $('bmic'); if (b) b.style.opacity = call.local.getAudioTracks()[0]?.enabled === false ? '0.4' : '1';
+}
+function toggleCam() {
+  if (!call.local) return;
+  call.local.getVideoTracks().forEach(t => t.enabled = !t.enabled);
+  const b = $('bcam'); if (b) b.style.opacity = call.local.getVideoTracks()[0]?.enabled === false ? '0.4' : '1';
+}
+
+/* ============================ 13. Navigation, theme, language ============================ */
+function go(tab) {
+  st.tab = tab; st.chatWith = null;
+  if (tab === 'notifs') markAllRead().catch(() => {});
+  render();
+}
+function setLang(l) { lang = l; localStorage.setItem('mb_lang', l); render(); }
+function setTheme(t) {
+  theme = t; localStorage.setItem('mb_theme', t);
+  document.documentElement.classList.toggle('light', t === 'light');
+  render();
+}
+setTheme(theme); // apply saved theme on load (also re-renders)
+
+/* ============================ 14. Views ============================ */
+function authView() {
+  if (!CONFIGURED) return `<p class="text-center text-sm text-amber-400 py-10">${tr('noConfig')}</p>`;
+  if (st.user && !st.profile) return setupView();
+  return `<div class="space-y-5 py-6 max-w-sm mx-auto">
+    <div class="text-center space-y-3">
+      ${logoHTML('w-16 h-16 mx-auto')}
+      <h2 class="text-2xl font-bold">${tr('welcome')}</h2>
+      <p class="text-xs muted">${tr('tagline')}</p>
+    </div>
+    <button onclick="loginGoogle()" class="w-full py-3 card text-sm font-medium">${tr('google')}</button>
+    <div class="text-center text-[11px] uppercase muted tracking-wider">${tr('or')}</div>
+    ${st.step === 'phone' ? `
+      <form onsubmit="sendCode(event)" class="space-y-3">
+        <input id="ph" type="tel" value="${esc(st.phone)}" placeholder="${tr('phone')}" class="input">
+        <button class="btn w-full py-3">${tr('sendCode')}</button>
+      </form>` : `
+      <form onsubmit="verifyCode(event)" class="space-y-3">
+        <input id="cd" inputmode="numeric" maxlength="6" placeholder="${tr('code')}" class="input text-center tracking-[0.4em] text-xl">
+        <button class="btn w-full py-3">${tr('verify')}</button>
+      </form>
+      <button onclick="st.step='phone';render()" class="w-full text-xs muted">${tr('back')}</button>`}
+    ${st.err ? `<p class="text-center text-xs text-rose-400">${esc(st.err)}</p>` : ''}
+  </div>`;
+}
+function setupView() {
+  return `<div class="space-y-4 py-6 max-w-sm mx-auto">
+    <h2 class="text-xl font-bold text-center">${tr('setupTitle')}</h2>
+    <form onsubmit="saveProfile(event)" class="space-y-3">
+      <label class="block text-xs muted">${tr('name')}
+        <input id="su-name" maxlength="40" value="${esc(st.user.displayName || '')}" class="input mt-1"></label>
+      <label class="block text-xs muted">${tr('nick')}
+        <input id="su-nick" maxlength="20" placeholder="johndoe" class="input mt-1">
+        <span class="block mt-1 text-[11px] muted">${tr('nickHint')}</span></label>
+      <button ${st.busy ? 'disabled' : ''} class="btn w-full py-3">${tr('save')}</button>
+    </form>
+    ${st.err ? `<p class="text-center text-xs text-rose-400">${esc(st.err)}</p>` : ''}
+    <button onclick="logout()" class="w-full text-xs muted">${tr('logout')}</button>
+  </div>`;
+}
+function reqBanner() {
+  if (!st.incoming.length) return '';
+  return `<div class="card p-3 space-y-3">
+    <div class="text-xs uppercase muted font-semibold">${tr('incoming')}</div>
+    ${st.incoming.map(r => { const p = prof(r.from); return `<div class="flex items-center gap-3">
+      ${avatar(p, 'w-9 h-9')}
+      <div class="flex-1 min-w-0 text-sm truncate font-semibold">${esc(p.name)}${badge(p)}</div>
+      <button onclick="acceptRequest('${r.from}')" class="btn">${tr('accept')}</button>
+      <button onclick="declineRequest('${r.from}')" class="btn-ghost">${tr('decline')}</button></div>`; }).join('')}
+  </div>`;
+}
+function feedView() {
+  const stories = `<div class="flex gap-4 overflow-x-auto hs pb-2">
+    <button onclick="openMood()" class="flex flex-col items-center gap-1 shrink-0">
+      <span class="w-16 h-16 rounded-full border-2 border-dashed border-[var(--accent)] flex items-center justify-center text-2xl" style="color:var(--accent)">+</span>
+      <span class="text-[11px] muted">${tr('yourDay')}</span></button>
+    ${st.friendIds.map(id => { const p = prof(id); return `<div class="flex flex-col items-center gap-1 shrink-0">
+      <span class="p-[3px] rounded-full grad">${avatar(p, 'w-14 h-14', 'text-lg')}</span>
+      <span class="text-[11px] muted truncate w-16 text-center">${esc(p.name.split(' ')[0])}</span></div>`; }).join('')}
+  </div>`;
+  const posts = st.posts.map(p => {
+    const a = prof(p.uid);
+    const liked = (p.likes || []).includes(st.user.uid);
+    const mine = p.uid === st.user.uid;
+    const canMsg = st.friendIds.includes(p.uid);
+    return `<article class="card p-4 space-y-3">
+      <div class="flex items-center gap-3">${avatar(a, 'w-11 h-11')}
+        <div class="flex-1 min-w-0"><div class="font-semibold text-sm truncate">${esc(a.name)}${badge(a)}</div>
+        <div class="text-xs muted truncate">@${esc(a.nick)} · ${ago(tsOf(p))}</div></div>
+        <span class="text-3xl">${p.mood}</span></div>
+      <p class="text-sm leading-relaxed whitespace-pre-wrap break-words">${esc(p.text)}</p>
+      <div class="flex items-center gap-4 pt-2 border-t line text-sm">
+        <button onclick="toggleLike('${p.id}')" class="flex items-center gap-1.5 ${liked ? 'text-pink-400' : 'muted'}">${liked ? '❤️' : '🤍'} ${(p.likes || []).length} ${tr('like')}</button>
+        ${canMsg ? `<button onclick="openChat('${p.uid}')" class="flex items-center gap-1.5 muted">💬 ${tr('message')}</button>` : ''}
+        ${mine ? `<button onclick="deletePost('${p.id}')" class="ml-auto text-xs muted hover:text-rose-400">${tr('del')}</button>` : ''}
+      </div></article>`;
+  }).join('');
+  return `<div class="space-y-4">${reqBanner()}${stories}
+    ${st.posts.length ? posts : `<p class="text-center text-sm muted py-10">${tr('noPosts')}</p>`}</div>`;
+}
+function searchView() {
+  const inc = st.incoming.map(r => { const p = prof(r.from); return `<div class="card p-3 flex items-center gap-3">
+    ${avatar(p)}<div class="flex-1 min-w-0"><div class="text-sm font-semibold truncate">${esc(p.name)}${badge(p)}</div><div class="text-xs muted">@${esc(p.nick)}</div></div>
+    <button onclick="acceptRequest('${r.from}')" class="btn">${tr('accept')}</button>
+    <button onclick="declineRequest('${r.from}')" class="btn-ghost">${tr('decline')}</button></div>`; }).join('');
+  const out = st.outgoing.map(r => { const p = prof(r.to); return `<div class="card p-3 flex items-center gap-3">
+    ${avatar(p)}<div class="flex-1 min-w-0"><div class="text-sm font-semibold truncate">${esc(p.name)}${badge(p)}</div><div class="text-xs muted">@${esc(p.nick)}</div></div>
+    <button onclick="cancelRequest('${r.to}')" class="btn-ghost">${tr('cancel')}</button></div>`; }).join('');
+  return `<div class="space-y-4">
+    <h2 class="text-xl font-bold">${tr('findPeople')}</h2>
+    <input id="q" value="${esc(st.searchQ)}" oninput="runSearch(this.value)" placeholder="${tr('searchPh')}" class="input">
+    <div id="results" class="space-y-2"></div>
+    ${inc ? `<h3 class="text-xs uppercase muted font-semibold pt-2">${tr('incoming')}</h3>${inc}` : ''}
+    ${out ? `<h3 class="text-xs uppercase muted font-semibold pt-2">${tr('outgoing')}</h3>${out}` : ''}
+  </div>`;
+}
+function notifsView() {
+  const items = st.notifs.map(n => { const p = prof(n.from); return `<div class="card p-3 flex items-center gap-3 ${n.read ? '' : 'ring-1 ring-[var(--accent)]'}">
+    ${avatar(p, 'w-10 h-10')}<div class="flex-1 min-w-0 text-sm"><span class="font-semibold">${esc(p.name)}${badge(p)}</span> ${esc(notifText(n).slice(p.name.length + 1))}
+    <div class="text-[11px] muted">${ago(tsOf(n))}</div></div>
+    <span>${n.type === 'like' ? '❤️' : n.type === 'request' ? '👋' : '🤝'}</span></div>`; }).join('');
+  const reqs = st.incoming.map(r => { const p = prof(r.from); return `<div class="card p-3 flex items-center gap-3">
+    ${avatar(p)}<div class="flex-1 min-w-0 text-sm truncate font-semibold">${esc(p.name)}${badge(p)}</div>
+    <button onclick="acceptRequest('${r.from}')" class="btn">${tr('accept')}</button>
+    <button onclick="declineRequest('${r.from}')" class="btn-ghost">${tr('decline')}</button></div>`; }).join('');
+  return `<div class="space-y-3">
+    <h2 class="text-xl font-bold">${tr('notifs')}</h2>
+    ${reqs}
+    ${items || `<p class="text-center text-sm muted py-10">${tr('noNotifs')}</p>`}</div>`;
+}
+function chatsView() {
+  if (st.chatWith) return chatDetailView();
+  const list = st.friendIds.map(prof);
+  return `<div class="space-y-3">
+    <h2 class="text-xl font-bold">${tr('directMessages')}</h2>
+    ${list.length ? list.map(p => `<button onclick="openChat('${p.id}')" class="card w-full p-3 flex items-center gap-3 text-left">
+      ${avatar(p, 'w-12 h-12')}<div class="flex-1 min-w-0"><div class="font-semibold text-sm truncate">${esc(p.name)}${badge(p)}</div>
+      <div class="text-xs muted truncate">@${esc(p.nick)}</div></div></button>`).join('')
+      : `<p class="text-center text-sm muted py-10">${tr('noChats')}</p>`}</div>`;
+}
+function chatDetailView() {
+  const p = prof(st.chatWith);
+  const bubbles = st.msgs.map(m => {
+    const mine = m.from === st.user.uid;
+    return `<div class="flex ${mine ? 'justify-end' : 'justify-start'}"><div class="max-w-[75%] px-3.5 py-2 rounded-2xl text-sm break-words ${mine ? 'text-white' : ''}" style="${mine ? 'background:linear-gradient(135deg,#6c5cff,#c04bff)' : 'background:var(--card2)'}">${esc(m.text)}</div></div>`;
+  }).join('');
+  return `<div class="fixed inset-0 z-40 flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] md:fixed md:left-64 md:right-0 md:top-0 md:bottom-0 md:rounded-none" style="background:var(--card)">
+    <div class="flex items-center gap-3 p-3 border-b line">
+      <button onclick="closeChat()" class="text-lg muted">←</button>
+      ${avatar(p, 'w-9 h-9', 'text-sm')}<div><div class="font-semibold text-sm">${esc(p.name)}${badge(p)}</div><div class="text-xs muted">@${esc(p.nick)}</div></div>
+      <div class="ml-auto flex gap-4 text-lg">
+        <button onclick="startCall('${p.id}','audio')" title="Voice call">📞</button>
+        <button onclick="startCall('${p.id}','video')" title="Video call">🎥</button></div></div>
+    <div id="msgs" class="flex-1 overflow-y-auto hs p-3 space-y-2">${bubbles}</div>
+    <form onsubmit="sendMessage(event)" class="p-3 border-t line flex gap-2">
+      <input value="${esc(st.draftMsg)}" oninput="st.draftMsg=this.value" autocomplete="off" placeholder="${tr('typeMsg')}" class="input">
+      <button class="btn px-5">${tr('send')}</button></form></div>`;
+}
+function profileView() {
+  const p = st.profile;
+  const mine = st.posts.filter(x => x.uid === st.user.uid);
+  return `<div class="space-y-5">
+    <div class="text-center space-y-2 pt-2">
+      ${avatar(p, 'w-24 h-24 mx-auto', 'text-3xl')}
+      <label class="btn-ghost inline-block cursor-pointer text-xs">📷 ${tr('changePhoto')}<input type="file" accept="image/*" hidden onchange="uploadPhoto(this)"></label>
+      <h2 class="text-xl font-bold">${esc(p.name)}${badge(p)}</h2>
+      <p class="text-sm" style="color:var(--accent)">@${esc(p.nick)}</p>
+    </div>
+    <div class="card grid grid-cols-2 text-center py-4">
+      <div><div class="font-bold text-lg">${mine.length}</div><div class="text-[11px] uppercase muted tracking-wider">${tr('postsLbl')}</div></div>
+      <div><div class="font-bold text-lg">${st.friendIds.length}</div><div class="text-[11px] uppercase muted tracking-wider">${tr('friendsLbl')}</div></div>
+    </div>
+    <h3 class="text-xs uppercase muted font-semibold">${tr('moodHistory')}</h3>
+    ${mine.length ? mine.map(x => `<div class="card p-3 flex items-start gap-3">
+      <span class="text-2xl">${x.mood}</span><div class="flex-1 text-sm break-words">${esc(x.text)}
+      <div class="text-[11px] muted mt-1">${ago(tsOf(x))}</div></div>
+      <button onclick="deletePost('${x.id}')" class="text-xs muted hover:text-rose-400">${tr('del')}</button></div>`).join('')
+      : `<p class="text-center text-sm muted py-6">${tr('noMine')}</p>`}
+  </div>`;
+}
+function settingsView() {
+  const seg = (on) => on ? 'bg-[var(--accent)] text-white' : 'soft muted';
+  return `<div class="space-y-5">
+    <h2 class="text-xl font-bold">${tr('settings')}</h2>
+    <div class="card p-4 space-y-4">
+      <div>
+        <div class="text-xs muted mb-2">${tr('language')}</div>
+        <div class="flex gap-2">
+          <button onclick="setLang('en')" class="flex-1 py-2 rounded-xl text-sm ${seg(lang === 'en')}">English</button>
+          <button onclick="setLang('ru')" class="flex-1 py-2 rounded-xl text-sm ${seg(lang === 'ru')}">Русский</button>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs muted mb-2">${tr('theme')}</div>
+        <div class="flex gap-2">
+          <button onclick="setTheme('dark')" class="flex-1 py-2 rounded-xl text-sm ${seg(theme === 'dark')}">🌙 ${tr('dark')}</button>
+          <button onclick="setTheme('light')" class="flex-1 py-2 rounded-xl text-sm ${seg(theme === 'light')}">☀️ ${tr('light')}</button>
+        </div>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-sm">🔔 ${lang === 'ru' ? 'Звук уведомлений' : 'Notification sound'}</span>
+        <button onclick="toggleSound()" class="px-3 py-1.5 rounded-xl text-sm ${soundOn() ? 'bg-[var(--accent)] text-white' : 'soft muted'}">${soundOn() ? (lang === 'ru' ? 'Вкл' : 'On') : (lang === 'ru' ? 'Выкл' : 'Off')}</button>
+      </div>
+      ${('Notification' in window) ? `<button onclick="enableNotifications()" class="w-full py-2.5 rounded-xl soft text-sm">${Notification.permission === 'granted' ? tr('notifOk') : tr('notifOn')}</button>` : ''}
+    </div>
+    <div class="card p-4 space-y-3 text-sm">
+      <h3 class="font-bold">${tr('aboutTitle')}</h3>
+      <p class="muted leading-relaxed">${tr('aboutText')}</p>
+      <div class="soft rounded-xl p-3 text-xs leading-relaxed"><b>ℹ️</b> ${tr('aboutWhy')}</div>
+      <p class="muted text-xs">${tr('aboutPrivacy')}</p>
+      <div class="flex justify-between text-xs muted pt-2 border-t line"><span>${tr('aboutVersion')}</span><span>${tr('aboutDev')}</span></div>
+    </div>
+    <button onclick="logout()" class="w-full py-2.5 rounded-xl bg-rose-600 text-white text-sm font-semibold">${tr('logout')}</button>
+  </div>`;
+}
+function moodModalHTML() {
+  return `<div class="fixed inset-0 z-50 bg-black/60 flex items-end md:items-center justify-center p-0 md:p-4" onclick="if(event.target===this)closeMood()">
+    <div class="card w-full md:max-w-md rounded-b-none md:rounded-2xl p-5 space-y-4">
+      <div class="flex items-center justify-between"><h3 class="font-bold">${tr('moodTitle')}</h3>
+        <button onclick="closeMood()" class="muted text-lg">✕</button></div>
+      <div>
+        <div class="text-xs muted mb-2">${tr('moodQ')}</div>
+        <div class="flex justify-between gap-1">${MOODS.map(m => `<button onclick="st.mood='${m}';render()" class="mood-chip ${m === st.mood ? 'on' : ''}">${m}</button>`).join('')}</div>
+      </div>
+      <div>
+        <div class="text-xs muted mb-2">${tr('storyQ')}</div>
+        <textarea oninput="st.draftPost=this.value" rows="4" placeholder="${tr('storyPh')}" class="input resize-none">${esc(st.draftPost)}</textarea>
+      </div>
+      <button onclick="publishMood()" class="btn w-full py-3">${tr('publish')}</button>
+    </div></div>`;
+}
+
+/* ============================ 15. Render ============================ */
+const TABS = [['feed', '🏠'], ['search', '🔍'], ['chats', '💬'], ['profile', '👤']];
+function tabBtnMobile(k, icon) {
+  const active = st.tab === k;
+  return `<button onclick="go('${k}')" class="flex-1 flex flex-col items-center gap-0.5 text-[10px] ${active ? 'text-[var(--accent)]' : 'muted'}"><span class="text-xl">${icon}</span>${tr(k)}</button>`;
+}
+function tabBtnDesk(k, icon) {
+  const active = st.tab === k || (k === 'notifs' && st.tab === 'notifs');
+  return `<button onclick="go('${k}')" class="relative w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[15px] ${active ? 'soft font-semibold' : 'muted'}"><span class="w-6 text-lg">${icon}</span>${tr(k)}</button>`;
+}
+function renderChrome() {
+  const authed = !!st.profile;
+  const badge = unread();
+  const bell = `<button onclick="go('notifs')" class="relative muted text-lg">🔔${badge ? `<b class="absolute -top-1 -right-1 bg-pink-500 text-white text-[10px] rounded-full px-1.5">${badge}</b>` : ''}</button>`;
+  const gear = `<button onclick="go('settings')" class="muted text-lg">⚙️</button>`;
+  const langs = ['en', 'ru'].map(l => `<button onclick="setLang('${l}')" class="px-2 py-0.5 rounded-md text-xs ${lang === l ? 'bg-[var(--accent)] text-white' : 'soft muted'}">${l.toUpperCase()}</button>`).join('');
+
+  $('side').innerHTML = authed ? `
+    <div class="flex items-center gap-2 px-3 pb-6 pt-2">${logoHTML('w-9 h-9')}<span class="text-xl logo-text">MoodBook</span></div>
+    ${[['feed', '🏠'], ['search', '🔍'], ['notifs', '🔔'], ['chats', '💬'], ['profile', '👤'], ['settings', '⚙️']].map(([k, i]) => tabBtnDesk(k, i)).join('')}
+    <button onclick="openMood()" class="btn mt-4 py-3">+ ${tr('publish')}</button>
+    <div class="mt-auto flex gap-1 px-2">${langs}</div>` : '';
+
+  $('top').innerHTML = authed ? `
+    <div class="flex items-center gap-2">${logoHTML('w-8 h-8')}<span class="text-xl logo-text">MoodBook</span></div>
+    <div class="flex items-center gap-4">
+      <button onclick="go('search')" class="muted text-lg">🔍</button>${bell}${gear}</div>` : '';
+
+  $('nav').innerHTML = authed ? `
+    ${tabBtnMobile('feed', '🏠')}${tabBtnMobile('chats', '💬')}
+    <button onclick="openMood()" class="-mt-6 w-14 h-14 rounded-full grad text-white text-3xl flex items-center justify-center shadow-lg">+</button>
+    ${tabBtnMobile('search', '🔍')}${tabBtnMobile('profile', '👤')}` : '';
+
+  $('top').classList.toggle('hidden', !authed);
+  $('nav').classList.toggle('hidden', !authed || !!st.chatWith);
+  $('side').classList.toggle('md:flex', authed);
+  $('main').className = authed
+    ? 'px-4 py-4 pb-28 md:pb-10 md:ml-64 mx-auto min-h-screen ' + (st.chatWith ? 'max-w-3xl' : 'max-w-xl')
+    : 'px-4 max-w-md mx-auto min-h-screen flex flex-col';
+}
+function renderMain() {
+  const views = { feed: feedView, search: searchView, notifs: notifsView, chats: chatsView, profile: profileView, settings: settingsView, user: userView };
+  const focus = document.activeElement && document.activeElement.id;
+  $('main').innerHTML = st.profile
+    ? (views[st.tab] || feedView)()
+    : `<div class="flex-1 flex items-center justify-center w-full py-6">${authView()}</div>
+       <p class="text-center text-xs muted pb-4 w-full">${tr('byline')}</p>`;
+  if (st.tab === 'search' && st.profile && st.searchQ) runSearch(st.searchQ);
+  if (st.modal && st.profile) document.body.insertAdjacentHTML('beforeend', moodModalHTML());
+  if (focus === 'q') { const q = $('q'); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+}
+function render() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('body > .fixed.inset-0').forEach(n => n.remove()); // clear old mood modal
+  renderChrome();
+  renderMain();
+}
+render();
+</script>
+</body>
+</html>
